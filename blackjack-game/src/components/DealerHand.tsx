@@ -1,107 +1,84 @@
 import React from 'react';
-import { Hand } from '../types/game';
+import { Hand, GameState } from '../types/game';
 import Card from './Card';
 
 interface DealerHandProps {
   hand: Hand;
-  isDealing?: boolean;
-  animationSpeed?: number;
-  hideValue?: boolean;
+  isDealing: boolean;
+  gameState: GameState;
 }
 
-const DealerHand: React.FC<DealerHandProps> = ({ 
-  hand, 
-  isDealing = false, 
-  animationSpeed = 500,
-  hideValue = false
-}) => {
-  // Calculate visible cards value for display when one card is hidden
-  const getVisibleValue = (): number => {
-    const visibleCards = hand.cards.filter(card => card.isVisible);
-    if (visibleCards.length === 0) return 0;
-    
-    let value = 0;
-    let aces = 0;
-    
-    visibleCards.forEach(card => {
-      if (card.rank === 'A') {
-        aces += 1;
-        value += 11;
-      } else {
-        value += card.value;
-      }
-    });
-    
-    // Adjust for Aces
-    while (value > 21 && aces > 0) {
-      value -= 10;
-      aces -= 1;
-    }
-    
-    return value;
-  };
-
-  const visibleValue = getVisibleValue();
-  const hasHiddenCard = hand.cards.some(card => !card.isVisible);
-  const displayValue = hideValue || hasHiddenCard ? visibleValue : hand.value;
+const DealerHand: React.FC<DealerHandProps> = ({ hand, isDealing, gameState }) => {
+  const showValue = gameState === 'dealer-turn' || gameState === 'game-over' || hand.cards.every(card => card.isVisible);
+  const hiddenCard = hand.cards.find(card => !card.isVisible);
 
   return (
     <div className="flex flex-col items-center space-y-4">
       {/* Dealer label */}
-      <div className="text-white text-lg sm:text-xl font-bold">
-        Dealer
+      <div className="retro-font text-red-400 text-lg neon-glow">
+        DEALER
       </div>
-
+      
       {/* Cards */}
-      <div className="flex space-x-2 sm:space-x-3">
+      <div className="flex space-x-2">
         {hand.cards.map((card, index) => (
-          <div key={`dealer-${card.suit}-${card.rank}-${index}`} className="relative">
-            <Card 
-              card={card} 
-              isDealing={isDealing && index === hand.cards.length - 1}
-              animationDelay={index * (animationSpeed / 2)}
-            />
-          </div>
+          <Card
+            key={`${card.suit}-${card.rank}-${index}`}
+            card={card}
+            isDealing={isDealing && index === hand.cards.length - 1}
+            className="card-deal"
+          />
         ))}
+        
+        {/* Empty card placeholder when no cards */}
+        {hand.cards.length === 0 && (
+          <div className="w-16 h-24 border-2 border-dashed border-gray-600 rounded-lg flex items-center justify-center">
+            <div className="retro-font-alt text-xs text-gray-500">
+              CARDS
+            </div>
+          </div>
+        )}
       </div>
-
-      {/* Hand value and status */}
-      <div className="flex flex-col items-center space-y-1">
-        <div className="text-white text-base sm:text-lg">
-          Hand Value: <span className="font-bold">
-            {hasHiddenCard ? `${displayValue}+` : displayValue}
-          </span>
+      
+      {/* Hand value */}
+      {hand.cards.length > 0 && (
+        <div className="retro-card p-2 text-center">
+          <div className="retro-font-alt text-xs text-gray-400 mb-1">VALUE</div>
+          
+          {showValue ? (
+            <div className={`retro-font text-lg ${
+              hand.isBust ? 'text-red-400 neon-glow' : 
+              hand.isBlackjack ? 'text-yellow-400 neon-glow' : 
+              'text-red-400'
+            }`}>
+              {hand.value}
+            </div>
+          ) : (
+            <div className="retro-font text-lg text-gray-500">
+              {hiddenCard ? `${hand.cards[0].value} + ?` : hand.value}
+            </div>
+          )}
+          
+          {/* Status indicators */}
+          {showValue && hand.isBlackjack && (
+            <div className="retro-font-alt text-xs text-yellow-400 mt-1 neon-glow">
+              BLACKJACK!
+            </div>
+          )}
+          
+          {showValue && hand.isBust && (
+            <div className="retro-font-alt text-xs text-red-400 mt-1 neon-glow">
+              BUST!
+            </div>
+          )}
+          
+          {hiddenCard && gameState === 'player-turn' && (
+            <div className="retro-font-alt text-xs text-gray-500 mt-1">
+              HIDDEN CARD
+            </div>
+          )}
         </div>
-        
-        {hand.isBlackjack && !hasHiddenCard && (
-          <div className="text-yellow-400 text-sm sm:text-base font-bold animate-pulse">
-            🎉 BLACKJACK! 🎉
-          </div>
-        )}
-        
-        {hand.isBust && !hasHiddenCard && (
-          <div className="text-red-400 text-sm sm:text-base font-bold animate-pulse">
-            💥 BUST! 💥
-          </div>
-        )}
-
-        {/* Soft/Hard indicator - only show when no hidden cards */}
-        {hand.cards.length > 0 && !hand.isBust && !hand.isBlackjack && !hasHiddenCard && (
-          <div className="text-gray-300 text-xs sm:text-sm">
-            {hand.cards.some(card => card.rank === 'A') && hand.value <= 21 ? 
-              (hand.cards.some(card => card.rank === 'A') && 
-               hand.cards.reduce((sum, card) => sum + (card.rank === 'A' ? 1 : card.value), 0) + 10 === hand.value ?
-               'Soft' : 'Hard') : 
-              'Hard'}
-          </div>
-        )}
-
-        {hasHiddenCard && (
-          <div className="text-gray-400 text-xs sm:text-sm">
-            Hidden card
-          </div>
-        )}
-      </div>
+      )}
     </div>
   );
 };

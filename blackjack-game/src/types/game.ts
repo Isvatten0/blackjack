@@ -12,14 +12,36 @@ export interface Hand {
   isBlackjack: boolean;
 }
 
-export type GameState = 'waiting' | 'dealing' | 'player-turn' | 'dealer-turn' | 'game-over';
+export type GameState = 'waiting' | 'betting' | 'dealing' | 'player-turn' | 'dealer-turn' | 'game-over';
 
-export type GameSpeed = 'beginner' | 'medium' | 'fast' | 'custom';
+export type GameSpeed = 'beginner' | 'medium' | 'fast' | 'slow' | 'custom';
+
+export interface ChipBet {
+  denomination: number;
+  count: number;
+}
+
+export interface CardCounts {
+  '2': number;
+  '3': number;
+  '4': number;
+  '5': number;
+  '6': number;
+  '7': number;
+  '8': number;
+  '9': number;
+  '10': number;
+  'J': number;
+  'Q': number;
+  'K': number;
+  'A': number;
+}
 
 export interface GameSettings {
   speed: GameSpeed;
   numDecks: number;
   showCardCounter: boolean;
+  showDetailedCounter: boolean;
   customTimerLength: number;
   customAnimationSpeed: number;
   soundEnabled: boolean;
@@ -31,6 +53,8 @@ export interface GameStats {
   pushes: number;
   blackjacks: number;
   busts: number;
+  totalChipsWon: number;
+  totalChipsLost: number;
 }
 
 export interface GameData {
@@ -40,7 +64,12 @@ export interface GameData {
   gameState: GameState;
   gameMessage: string;
   runningCount: number;
+  cardCounts: CardCounts;
   settings: GameSettings;
   stats: GameStats;
   turnTimeLeft: number;
+  chipPot: number;
+  currentBet: number;
+  recommendedBet: number;
+  originalDeckSize: number;
 }

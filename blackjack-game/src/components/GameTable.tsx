@@ -1,44 +1,63 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { GameData, Hand, GameState, GameSettings, GameStats } from '../types/game';
+import { GameData, Hand, GameState, GameSettings, GameStats, CardCounts } from '../types/game';
 import { 
   createShuffledDecks, 
   dealCard, 
   updateRunningCount, 
+  updateCardCounts,
+  initializeCardCounts,
   needsReshuffle,
   getSpeedSettings,
   determineWinner,
   shouldDealerHit,
-  updateHand
+  updateHand,
+  calculateTrueCount,
+  calculateDecksRemaining,
+  calculateRecommendedBet,
+  calculateWinnings
 } from '../utils/gameLogic';
-import { loadSettings, saveSettings, loadStats, saveStats } from '../utils/storage';
+import { loadSettings, saveSettings, loadStats, saveStats, loadChipPot, saveChipPot } from '../utils/storage';
 import { playCardDeal, playWin, playLoss, playBust, playBlackjack, playShuffle, setSoundEnabled } from '../utils/sounds';
 import PlayerHand from './PlayerHand';
 import DealerHand from './DealerHand';
 import GameControls from './GameControls';
 import CardCounter from './CardCounter';
+import BettingInterface from './BettingInterface';
 import UISettings from './UISettings';
 
 const GameTable: React.FC = () => {
   const [gameData, setGameData] = useState<GameData>(() => {
     const settings = loadSettings();
     const stats = loadStats();
+    const chipPot = loadChipPot();
+    const initialDeck = createShuffledDecks(settings.numDecks);
     
     return {
       playerHand: { cards: [], value: 0, isBust: false, isBlackjack: false },
       dealerHand: { cards: [], value: 0, isBust: false, isBlackjack: false },
-      deck: createShuffledDecks(settings.numDecks),
+      deck: initialDeck,
       gameState: 'waiting' as GameState,
-      gameMessage: 'Welcome to Blackjack! Click Deal Cards to start.',
+      gameMessage: 'Welcome to Retro Blackjack! Place your bet to start.',
       runningCount: 0,
+      cardCounts: initializeCardCounts(settings.numDecks),
       settings,
       stats,
       turnTimeLeft: 0,
+      chipPot,
+      currentBet: 0,
+      recommendedBet: 0,
+      originalDeckSize: initialDeck.length,
     };
   });
 
   const [isSettingsVisible, setIsSettingsVisible] = useState(false);
   const [isCounterVisible, setIsCounterVisible] = useState(gameData.settings.showCardCounter);
   const [isDealing, setIsDealing] = useState(false);
+
+  // Update sound setting when component mounts
+  useEffect(() => {
+    setSoundEnabled(gameData.settings.soundEnabled);
+  }, [gameData.settings.soundEnabled]);
 
   const getAnimationSpeed = useCallback(() => {
     const speedSettings = getSpeedSettings(
@@ -55,153 +74,125 @@ const GameTable: React.FC = () => {
       gameData.settings.customTimerLength,
       gameData.settings.customAnimationSpeed
     );
-    return speedSettings.timerLength;
+    // Slow speed mode has no timer
+    return gameData.settings.speed === 'slow' ? 0 : speedSettings.timerLength;
   }, [gameData.settings]);
 
-  const handleStand = useCallback(async () => {
-    if (gameData.gameState !== 'player-turn') return;
-
-    setGameData(prev => ({ 
-      ...prev, 
-      gameState: 'dealer-turn',
-      gameMessage: 'Dealer playing...',
-      turnTimeLeft: 0
-    }));
-
-    // Reveal dealer's hidden card
-    const revealedDealerHand = updateHand({
-      ...gameData.dealerHand,
-      cards: gameData.dealerHand.cards.map(card => ({ ...card, isVisible: true }))
-    });
-
-    let newRunningCount = updateRunningCount(gameData.runningCount, revealedDealerHand.cards[1]);
+  // Calculate true count and recommended bet
+  useEffect(() => {
+    const decksRemaining = calculateDecksRemaining(gameData.deck.length);
+    const trueCount = calculateTrueCount(gameData.runningCount, decksRemaining);
+    const recommendedBet = calculateRecommendedBet(trueCount, 10);
     
-    setGameData(prev => ({ 
-      ...prev, 
-      dealerHand: revealedDealerHand,
-      runningCount: newRunningCount
-    }));
-
-    const animationSpeed = getAnimationSpeed();
-    await new Promise(resolve => setTimeout(resolve, animationSpeed));
-
-    // Dealer draws cards
-    let currentDeck = [...gameData.deck];
-    let currentDealerHand = { ...revealedDealerHand };
-
-    while (shouldDealerHit(currentDealerHand)) {
-      const dealResult = dealCard(currentDeck, currentDealerHand);
-      currentDeck = dealResult.newDeck;
-      currentDealerHand = dealResult.newHand;
-      newRunningCount = updateRunningCount(newRunningCount, dealResult.newHand.cards[dealResult.newHand.cards.length - 1]);
-      playCardDeal();
-      
-      setGameData(prev => ({ 
-        ...prev, 
-        dealerHand: currentDealerHand, 
-        deck: currentDeck,
-        runningCount: newRunningCount
-      }));
-      
-      await new Promise(resolve => setTimeout(resolve, animationSpeed));
-    }
-
-    // Determine winner
-    const winner = determineWinner(gameData.playerHand, currentDealerHand);
-    let gameMessage = '';
-    
-    switch (winner) {
-      case 'player':
-        gameMessage = 'You win!';
-        playWin();
-        break;
-      case 'player-blackjack':
-        gameMessage = 'Blackjack! You win!';
-        playBlackjack();
-        break;
-      case 'dealer':
-        gameMessage = 'Dealer wins!';
-        if (currentDealerHand.isBust) {
-          playWin(); // Player wins because dealer busted
-        } else {
-          playLoss();
-        }
-        break;
-      case 'push':
-        gameMessage = 'Push! It\'s a tie!';
-        break;
-    }
-
     setGameData(prev => ({
       ...prev,
-      dealerHand: currentDealerHand,
-      deck: currentDeck,
-      runningCount: newRunningCount,
-      gameState: 'game-over',
-      gameMessage
+      recommendedBet
     }));
+  }, [gameData.runningCount, gameData.deck.length]);
 
-    updateGameStats(gameData.playerHand, currentDealerHand);
-  }, [gameData, getAnimationSpeed]);
-
-  // Timer for player turns
+  // Timer effect for player turn
   useEffect(() => {
-    let timer: NodeJS.Timeout | undefined;
-    
     if (gameData.gameState === 'player-turn' && gameData.turnTimeLeft > 0) {
-      timer = setTimeout(() => {
+      const timer = setTimeout(() => {
         setGameData(prev => ({
           ...prev,
-          turnTimeLeft: prev.turnTimeLeft - 1
+          turnTimeLeft: Math.max(0, prev.turnTimeLeft - 1)
         }));
       }, 1000);
-    } else if (gameData.gameState === 'player-turn' && gameData.turnTimeLeft === 0) {
-      // Auto-stand when timer runs out
-      handleStand();
+
+      return () => clearTimeout(timer);
     }
 
-    return () => {
-      if (timer) clearTimeout(timer);
-    };
-  }, [gameData.gameState, gameData.turnTimeLeft, handleStand]);
+    // Auto-stand when timer reaches 0 (only if not in slow mode)
+    if (gameData.gameState === 'player-turn' && gameData.turnTimeLeft === 0 && getTimerLength() > 0) {
+      handleStand();
+    }
+  }, [gameData.gameState, gameData.turnTimeLeft, getTimerLength]);
 
-  // Save settings and stats when they change
-  useEffect(() => {
-    saveSettings(gameData.settings);
-  }, [gameData.settings]);
+  const updateGameStats = useCallback((playerHand: Hand, dealerHand: Hand, winnings: number) => {
+    const winner = determineWinner(playerHand, dealerHand);
+    const newStats = { ...gameData.stats };
 
-  useEffect(() => {
-    saveStats(gameData.stats);
+    switch (winner) {
+      case 'player':
+      case 'player-blackjack':
+        newStats.wins += 1;
+        if (winner === 'player-blackjack') {
+          newStats.blackjacks += 1;
+        }
+        newStats.totalChipsWon += Math.abs(winnings);
+        break;
+      case 'dealer':
+        newStats.losses += 1;
+        newStats.totalChipsLost += Math.abs(winnings);
+        break;
+      case 'push':
+        newStats.pushes += 1;
+        break;
+    }
+
+    if (playerHand.isBust) {
+      newStats.busts += 1;
+    }
+
+    setGameData(prev => ({ ...prev, stats: newStats }));
+    saveStats(newStats);
   }, [gameData.stats]);
 
-  // Update counter visibility when settings change
-  useEffect(() => {
-    setIsCounterVisible(gameData.settings.showCardCounter);
-  }, [gameData.settings.showCardCounter]);
+  const handleBetChange = useCallback((bet: number) => {
+    setGameData(prev => ({ ...prev, currentBet: bet }));
+  }, []);
 
-  // Update sound settings when they change
-  useEffect(() => {
-    setSoundEnabled(gameData.settings.soundEnabled);
-  }, [gameData.settings.soundEnabled]);
+  const handleBetClear = useCallback(() => {
+    setGameData(prev => ({ ...prev, currentBet: 0 }));
+  }, []);
 
-  const dealInitialCards = useCallback(async () => {
+  const handleBetConfirm = useCallback(() => {
+    if (gameData.currentBet > 0 && gameData.currentBet <= gameData.chipPot) {
+      setGameData(prev => ({ 
+        ...prev, 
+        gameState: 'dealing',
+        gameMessage: 'Dealing cards...'
+      }));
+      handleDealCards();
+    }
+  }, [gameData.currentBet, gameData.chipPot]);
+
+  const reshuffleDeck = useCallback(() => {
+    const newDeck = createShuffledDecks(gameData.settings.numDecks);
+    setGameData(prev => ({
+      ...prev,
+      deck: newDeck,
+      cardCounts: initializeCardCounts(prev.settings.numDecks),
+      runningCount: 0,
+      originalDeckSize: newDeck.length
+    }));
+    playShuffle();
+  }, [gameData.settings.numDecks]);
+
+  const handleDealCards = useCallback(async () => {
+    if (gameData.gameState !== 'dealing') return;
+
     setIsDealing(true);
-    setGameData(prev => ({ ...prev, gameState: 'dealing', gameMessage: 'Dealing cards...' }));
-
-    const animationSpeed = getAnimationSpeed();
     let currentDeck = [...gameData.deck];
     let currentRunningCount = gameData.runningCount;
-    
-    // Check if we need to reshuffle
-    const totalCards = gameData.settings.numDecks * 52;
-    if (needsReshuffle(currentDeck, totalCards)) {
+    let currentCardCounts = { ...gameData.cardCounts };
+
+    const animationSpeed = getAnimationSpeed();
+
+    // Check if deck needs reshuffling
+    if (needsReshuffle(currentDeck, gameData.originalDeckSize)) {
       currentDeck = createShuffledDecks(gameData.settings.numDecks);
+      currentCardCounts = initializeCardCounts(gameData.settings.numDecks);
       currentRunningCount = 0;
+      
       playShuffle();
       setGameData(prev => ({ 
         ...prev, 
         deck: currentDeck,
+        cardCounts: currentCardCounts,
         runningCount: 0,
+        originalDeckSize: currentDeck.length,
         gameMessage: 'Shuffling new deck...' 
       }));
       await new Promise(resolve => setTimeout(resolve, animationSpeed));
@@ -213,46 +204,55 @@ const GameTable: React.FC = () => {
 
     // Deal player first card
     const { newDeck: deck1, newHand: playerHand1 } = dealCard(currentDeck, playerHand);
+    const dealtCard1 = playerHand1.cards[playerHand1.cards.length - 1];
     currentDeck = deck1;
     playerHand = playerHand1;
-    currentRunningCount = updateRunningCount(currentRunningCount, playerHand1.cards[playerHand1.cards.length - 1]);
+    currentRunningCount = updateRunningCount(currentRunningCount, dealtCard1);
+    currentCardCounts = updateCardCounts(currentCardCounts, dealtCard1);
     playCardDeal();
     
     setGameData(prev => ({ 
       ...prev, 
       playerHand: playerHand1, 
       deck: deck1,
-      runningCount: currentRunningCount 
+      runningCount: currentRunningCount,
+      cardCounts: currentCardCounts
     }));
     await new Promise(resolve => setTimeout(resolve, animationSpeed));
 
     // Deal dealer first card (visible)
     const { newDeck: deck2, newHand: dealerHand1 } = dealCard(currentDeck, dealerHand);
+    const dealtCard2 = dealerHand1.cards[dealerHand1.cards.length - 1];
     currentDeck = deck2;
     dealerHand = dealerHand1;
-    currentRunningCount = updateRunningCount(currentRunningCount, dealerHand1.cards[dealerHand1.cards.length - 1]);
+    currentRunningCount = updateRunningCount(currentRunningCount, dealtCard2);
+    currentCardCounts = updateCardCounts(currentCardCounts, dealtCard2);
     playCardDeal();
     
     setGameData(prev => ({ 
       ...prev, 
       dealerHand: dealerHand1, 
       deck: deck2,
-      runningCount: currentRunningCount 
+      runningCount: currentRunningCount,
+      cardCounts: currentCardCounts
     }));
     await new Promise(resolve => setTimeout(resolve, animationSpeed));
 
     // Deal player second card
     const { newDeck: deck3, newHand: playerHand2 } = dealCard(currentDeck, playerHand);
+    const dealtCard3 = playerHand2.cards[playerHand2.cards.length - 1];
     currentDeck = deck3;
     playerHand = playerHand2;
-    currentRunningCount = updateRunningCount(currentRunningCount, playerHand2.cards[playerHand2.cards.length - 1]);
+    currentRunningCount = updateRunningCount(currentRunningCount, dealtCard3);
+    currentCardCounts = updateCardCounts(currentCardCounts, dealtCard3);
     playCardDeal();
     
     setGameData(prev => ({ 
       ...prev, 
       playerHand: playerHand2, 
       deck: deck3,
-      runningCount: currentRunningCount 
+      runningCount: currentRunningCount,
+      cardCounts: currentCardCounts
     }));
     await new Promise(resolve => setTimeout(resolve, animationSpeed));
 
@@ -265,7 +265,9 @@ const GameTable: React.FC = () => {
     // Check for blackjacks
     const timerLength = getTimerLength();
     let newGameState: GameState = 'player-turn';
-    let gameMessage = 'Your turn! Hit or Stand?';
+    let gameMessage = gameData.settings.speed === 'slow' 
+      ? 'Your turn! Take your time to decide.'
+      : `Your turn! Hit or Stand? (${timerLength}s)`;
     
     if (playerHand.isBlackjack || dealerHand.isBlackjack) {
       newGameState = 'game-over';
@@ -284,6 +286,7 @@ const GameTable: React.FC = () => {
       dealerHand,
       deck: currentDeck,
       runningCount: currentRunningCount,
+      cardCounts: currentCardCounts,
       gameState: newGameState,
       gameMessage,
       turnTimeLeft: newGameState === 'player-turn' ? timerLength : 0
@@ -291,9 +294,20 @@ const GameTable: React.FC = () => {
 
     setIsDealing(false);
 
-    // Update stats for blackjacks
+    // Handle game end for blackjacks
     if (newGameState === 'game-over') {
-      updateGameStats(playerHand, dealerHand);
+      const winner = determineWinner(playerHand, dealerHand);
+      const winnings = calculateWinnings(gameData.currentBet, winner);
+      const newChipPot = gameData.chipPot + winnings;
+      
+      updateGameStats(playerHand, dealerHand, winnings);
+      
+      setGameData(prev => ({ 
+        ...prev, 
+        chipPot: newChipPot 
+      }));
+      saveChipPot(newChipPot);
+
       // Play appropriate sound for blackjack outcomes
       if (playerHand.isBlackjack && !dealerHand.isBlackjack) {
         playBlackjack();
@@ -301,17 +315,23 @@ const GameTable: React.FC = () => {
         playLoss();
       }
     }
-  }, [gameData.deck, gameData.runningCount, gameData.settings, getAnimationSpeed, getTimerLength]);
+  }, [gameData, getAnimationSpeed, getTimerLength, updateGameStats]);
 
-  const handleHit = useCallback(() => {
+  const handleHit = useCallback(async () => {
     if (gameData.gameState !== 'player-turn') return;
 
+    const animationSpeed = getAnimationSpeed();
     const { newDeck, newHand } = dealCard(gameData.deck, gameData.playerHand);
-    const newRunningCount = updateRunningCount(gameData.runningCount, newHand.cards[newHand.cards.length - 1]);
-    playCardDeal();
+    const dealtCard = newHand.cards[newHand.cards.length - 1];
+    const newRunningCount = updateRunningCount(gameData.runningCount, dealtCard);
+    const newCardCounts = updateCardCounts(gameData.cardCounts, dealtCard);
     
+    playCardDeal();
+
     let newGameState: GameState = 'player-turn';
-    let gameMessage = 'Your turn! Hit or Stand?';
+    let gameMessage = gameData.settings.speed === 'slow'
+      ? 'Your turn! Take your time to decide.'
+      : `Your turn! Hit or Stand? (${getTimerLength()}s)`;
     let turnTimeLeft = getTimerLength();
 
     if (newHand.isBust) {
@@ -326,163 +346,294 @@ const GameTable: React.FC = () => {
       playerHand: newHand,
       deck: newDeck,
       runningCount: newRunningCount,
+      cardCounts: newCardCounts,
       gameState: newGameState,
       gameMessage,
       turnTimeLeft
     }));
 
     if (newGameState === 'game-over') {
-      updateGameStats(newHand, gameData.dealerHand);
+      const winnings = calculateWinnings(gameData.currentBet, 'dealer');
+      const newChipPot = gameData.chipPot + winnings;
+      
+      updateGameStats(newHand, gameData.dealerHand, winnings);
+      
+      setGameData(prev => ({ 
+        ...prev, 
+        chipPot: newChipPot 
+      }));
+      saveChipPot(newChipPot);
     }
-  }, [gameData, getTimerLength]);
+  }, [gameData, getAnimationSpeed, getTimerLength, updateGameStats]);
 
-  const updateGameStats = (playerHand: Hand, dealerHand: Hand) => {
-    const winner = determineWinner(playerHand, dealerHand);
+  const handleStand = useCallback(async () => {
+    if (gameData.gameState !== 'player-turn') return;
+
+    setGameData(prev => ({ 
+      ...prev, 
+      gameState: 'dealer-turn',
+      gameMessage: 'Dealer playing...',
+      turnTimeLeft: 0
+    }));
+
+    // Reveal dealer's hidden card
+    const revealedDealerHand = updateHand({
+      ...gameData.dealerHand,
+      cards: gameData.dealerHand.cards.map(card => ({ ...card, isVisible: true }))
+    });
+
+    let newRunningCount = updateRunningCount(gameData.runningCount, revealedDealerHand.cards[1]);
+    let newCardCounts = updateCardCounts(gameData.cardCounts, revealedDealerHand.cards[1]);
+    
+    setGameData(prev => ({ 
+      ...prev, 
+      dealerHand: revealedDealerHand,
+      runningCount: newRunningCount,
+      cardCounts: newCardCounts
+    }));
+
+    const animationSpeed = getAnimationSpeed();
+    await new Promise(resolve => setTimeout(resolve, animationSpeed));
+
+    // Dealer draws cards
+    let currentDeck = [...gameData.deck];
+    let currentDealerHand = { ...revealedDealerHand };
+
+    while (shouldDealerHit(currentDealerHand)) {
+      const dealResult = dealCard(currentDeck, currentDealerHand);
+      const dealtCard = dealResult.newHand.cards[dealResult.newHand.cards.length - 1];
+      currentDeck = dealResult.newDeck;
+      currentDealerHand = dealResult.newHand;
+      newRunningCount = updateRunningCount(newRunningCount, dealtCard);
+      newCardCounts = updateCardCounts(newCardCounts, dealtCard);
+      playCardDeal();
+      
+      setGameData(prev => ({ 
+        ...prev, 
+        dealerHand: currentDealerHand, 
+        deck: currentDeck,
+        runningCount: newRunningCount,
+        cardCounts: newCardCounts
+      }));
+      
+      await new Promise(resolve => setTimeout(resolve, animationSpeed));
+    }
+
+    // Determine winner and update chips
+    const winner = determineWinner(gameData.playerHand, currentDealerHand);
+    const winnings = calculateWinnings(gameData.currentBet, winner);
+    const newChipPot = gameData.chipPot + winnings;
+    
+    let gameMessage = '';
+    switch (winner) {
+      case 'player':
+        gameMessage = `You win! +$${Math.abs(winnings)}`;
+        playWin();
+        break;
+      case 'player-blackjack':
+        gameMessage = `Blackjack! +$${Math.abs(winnings)}`;
+        playBlackjack();
+        break;
+      case 'dealer':
+        gameMessage = `Dealer wins! -$${Math.abs(winnings)}`;
+        playLoss();
+        break;
+      case 'push':
+        gameMessage = 'Push! Bet returned.';
+        break;
+    }
+
+    updateGameStats(gameData.playerHand, currentDealerHand, winnings);
     
     setGameData(prev => ({
       ...prev,
-      stats: {
-        ...prev.stats,
-        wins: prev.stats.wins + (winner === 'player' || winner === 'player-blackjack' ? 1 : 0),
-        losses: prev.stats.losses + (winner === 'dealer' ? 1 : 0),
-        pushes: prev.stats.pushes + (winner === 'push' ? 1 : 0),
-        blackjacks: prev.stats.blackjacks + (playerHand.isBlackjack ? 1 : 0),
-        busts: prev.stats.busts + (playerHand.isBust ? 1 : 0)
-      }
+      gameState: 'game-over',
+      gameMessage,
+      chipPot: newChipPot
     }));
-  };
+    
+    saveChipPot(newChipPot);
+  }, [gameData, getAnimationSpeed, updateGameStats]);
 
-  const handleNewGame = () => {
-    let newDeck = gameData.deck;
-    let newRunningCount = gameData.runningCount;
-
-    // Check if we need to reshuffle
-    if (needsReshuffle(newDeck, gameData.settings.numDecks * 52)) {
-      newDeck = createShuffledDecks(gameData.settings.numDecks);
-      newRunningCount = 0;
-    }
-
+  const handleNewGame = useCallback(() => {
     setGameData(prev => ({
       ...prev,
       playerHand: { cards: [], value: 0, isBust: false, isBlackjack: false },
       dealerHand: { cards: [], value: 0, isBust: false, isBlackjack: false },
-      deck: newDeck,
       gameState: 'waiting',
-      gameMessage: 'Click Deal Cards to start a new game.',
-      runningCount: newRunningCount,
-      turnTimeLeft: 0
+      gameMessage: 'Place your bet to start a new game.',
+      turnTimeLeft: 0,
+      currentBet: 0
     }));
-  };
+  }, []);
 
-  const handleSettingsChange = (newSettings: GameSettings) => {
-    setGameData(prev => ({
-      ...prev,
-      settings: newSettings
-    }));
-
-    // If deck count changed, create new deck
+  const handleSettingsUpdate = useCallback((newSettings: GameSettings) => {
+    // If number of decks changed, reshuffle
     if (newSettings.numDecks !== gameData.settings.numDecks) {
       const newDeck = createShuffledDecks(newSettings.numDecks);
       setGameData(prev => ({
         ...prev,
+        settings: newSettings,
         deck: newDeck,
-        runningCount: 0
+        cardCounts: initializeCardCounts(newSettings.numDecks),
+        runningCount: 0,
+        originalDeckSize: newDeck.length
       }));
+    } else {
+      setGameData(prev => ({ ...prev, settings: newSettings }));
     }
-  };
-
-  const handleClearStats = () => {
-    const newStats: GameStats = {
-      wins: 0,
-      losses: 0,
-      pushes: 0,
-      blackjacks: 0,
-      busts: 0
-    };
     
-    setGameData(prev => ({
-      ...prev,
-      stats: newStats
-    }));
-  };
+    saveSettings(newSettings);
+    setSoundEnabled(newSettings.soundEnabled);
+    setIsCounterVisible(newSettings.showCardCounter);
+  }, [gameData.settings.numDecks]);
 
-  const estimateDecksRemaining = () => {
-    const totalCards = gameData.settings.numDecks * 52;
-    const cardsRemaining = gameData.deck.length;
-    return Math.max(1, Math.ceil(cardsRemaining / 52));
-  };
+  const toggleCounter = useCallback(() => {
+    setIsCounterVisible(!isCounterVisible);
+  }, [isCounterVisible]);
+
+  const toggleDetailedCounter = useCallback(() => {
+    const newSettings = { 
+      ...gameData.settings, 
+      showDetailedCounter: !gameData.settings.showDetailedCounter 
+    };
+    handleSettingsUpdate(newSettings);
+  }, [gameData.settings, handleSettingsUpdate]);
+
+  const decksRemaining = calculateDecksRemaining(gameData.deck.length);
+  const trueCount = calculateTrueCount(gameData.runningCount, decksRemaining);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-green-800 via-green-900 to-green-felt relative overflow-hidden">
-      {/* Background pattern */}
-      <div className="absolute inset-0 opacity-10">
-        <div className="absolute inset-0 bg-repeat" style={{
-          backgroundImage: `radial-gradient(circle at 25% 25%, white 2px, transparent 2px)`,
-          backgroundSize: '50px 50px'
-        }}></div>
+    <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black relative overflow-hidden">
+      {/* Retro grid background effect */}
+      <div className="absolute inset-0 opacity-20" style={{
+        backgroundImage: `
+          linear-gradient(rgba(0, 255, 255, 0.1) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(0, 255, 255, 0.1) 1px, transparent 1px)
+        `,
+        backgroundSize: '50px 50px'
+      }} />
+      
+      {/* Main game title */}
+      <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-10">
+        <h1 className="retro-font text-2xl md:text-4xl text-cyan-400 neon-glow neon-pulse text-center">
+          RETRO BLACKJACK
+        </h1>
+        <div className="retro-font-alt text-center text-xs text-purple-400 mt-1">
+          Card Counting • Chip Betting • 80s Style
+        </div>
       </div>
 
       {/* Card Counter */}
       <CardCounter
         runningCount={gameData.runningCount}
+        trueCount={trueCount}
         isVisible={isCounterVisible}
-        onToggle={() => setIsCounterVisible(!isCounterVisible)}
-        deckCount={estimateDecksRemaining()}
+        onToggle={toggleCounter}
+        deckCount={decksRemaining}
+        cardCounts={gameData.cardCounts}
+        showDetailedCounter={gameData.settings.showDetailedCounter}
+        onToggleDetailed={toggleDetailedCounter}
       />
 
-      {/* Settings */}
-      <UISettings
-        settings={gameData.settings}
-        stats={gameData.stats}
-        onSettingsChange={handleSettingsChange}
-        onClearStats={handleClearStats}
-        isVisible={isSettingsVisible}
-        onToggle={() => setIsSettingsVisible(!isSettingsVisible)}
-      />
+      {/* Settings Button */}
+      <button
+        onClick={() => setIsSettingsVisible(!isSettingsVisible)}
+        className="absolute top-4 right-4 retro-button border-purple-400 text-purple-400 z-10"
+      >
+        ⚙️ Settings
+      </button>
 
-      {/* Main game area */}
-      <div className="relative z-5 flex flex-col items-center justify-center min-h-screen p-4 space-y-8">
-        {/* Game title */}
-        <div className="text-center mb-8">
-          <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold text-white mb-2">
-            Blackjack
-          </h1>
-          <div className="text-lg sm:text-xl text-green-200">
+      {/* Dealer Hand */}
+      <div className="absolute top-32 left-1/2 transform -translate-x-1/2">
+        <DealerHand
+          hand={gameData.dealerHand}
+          isDealing={isDealing}
+          gameState={gameData.gameState}
+        />
+      </div>
+
+      {/* Game message and deck info */}
+      <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-center z-10">
+        <div className="retro-card p-4 mb-4">
+          <div className="retro-font-alt text-lg text-cyan-400 neon-glow mb-2">
             {gameData.gameMessage}
           </div>
-        </div>
-
-        {/* Dealer area */}
-        <div className="w-full max-w-4xl">
-          <DealerHand 
-            hand={gameData.dealerHand}
-            isDealing={isDealing}
-            animationSpeed={getAnimationSpeed()}
-          />
-        </div>
-
-        {/* Game controls */}
-        <div className="my-8">
-          <GameControls
-            gameState={gameData.gameState}
-            onHit={handleHit}
-            onStand={handleStand}
-            onDeal={dealInitialCards}
-            onNewGame={handleNewGame}
-            turnTimeLeft={gameData.turnTimeLeft}
-            isTimerActive={getTimerLength() > 0}
-          />
-        </div>
-
-        {/* Player area */}
-        <div className="w-full max-w-4xl">
-          <PlayerHand 
-            hand={gameData.playerHand}
-            isDealing={isDealing}
-            animationSpeed={getAnimationSpeed()}
-          />
+          
+          {gameData.gameState === 'player-turn' && gameData.turnTimeLeft > 0 && (
+            <div className="retro-font text-yellow-400">
+              Time: {gameData.turnTimeLeft}s
+            </div>
+          )}
+          
+          <div className="retro-font-alt text-xs text-gray-400 mt-2 space-y-1">
+            <div>Deck: {gameData.deck.length} cards remaining</div>
+            <div>Penetration: {(((gameData.originalDeckSize - gameData.deck.length) / gameData.originalDeckSize) * 100).toFixed(1)}%</div>
+          </div>
         </div>
       </div>
+
+      {/* Player Hand */}
+      <div className="absolute bottom-32 left-1/2 transform -translate-x-1/2">
+        <PlayerHand
+          hand={gameData.playerHand}
+          isDealing={isDealing}
+        />
+      </div>
+
+      {/* Chip Pot Display */}
+      <div className="absolute bottom-4 right-4 z-10">
+        <div className="retro-card p-3 text-center">
+          <div className="retro-font-alt text-xs text-gray-400 mb-1">CHIP POT</div>
+          <div className="retro-font text-lg text-green-400 neon-glow">
+            ${gameData.chipPot}
+          </div>
+          {gameData.currentBet > 0 && (
+            <div className="retro-font-alt text-xs text-yellow-400 mt-1">
+              Bet: ${gameData.currentBet}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Game Controls */}
+      <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-10">
+        <GameControls
+          gameState={gameData.gameState}
+          onHit={handleHit}
+          onStand={handleStand}
+          onNewGame={handleNewGame}
+          onDealCards={handleDealCards}
+          isDealing={isDealing}
+          chipPot={gameData.chipPot}
+          currentBet={gameData.currentBet}
+        />
+      </div>
+
+      {/* Betting Interface */}
+      <BettingInterface
+        chipPot={gameData.chipPot}
+        currentBet={gameData.currentBet}
+        recommendedBet={gameData.recommendedBet}
+        onBetChange={handleBetChange}
+        onBetConfirm={handleBetConfirm}
+        onBetClear={handleBetClear}
+        isVisible={gameData.gameState === 'waiting'}
+        minBet={5}
+        maxBet={gameData.chipPot}
+      />
+
+      {/* Settings Panel */}
+      {isSettingsVisible && (
+        <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+          <UISettings
+            settings={gameData.settings}
+            stats={gameData.stats}
+            onSettingsUpdate={handleSettingsUpdate}
+            onClose={() => setIsSettingsVisible(false)}
+          />
+        </div>
+      )}
     </div>
   );
 };
