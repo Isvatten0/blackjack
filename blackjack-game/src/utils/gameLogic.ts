@@ -1,4 +1,4 @@
-import { Card, Hand } from '../types/game';
+import { Card, Hand, CardCounts } from '../types/game';
 
 // Create a standard deck of cards
 export const createDeck = (): Card[] => {
@@ -34,6 +34,54 @@ export const createShuffledDecks = (numDecks: number): Card[] => {
   }
   
   return shuffleDeck(multiDeck);
+};
+
+// Initialize card counts for detailed counter
+export const initializeCardCounts = (numDecks: number): CardCounts => {
+  return {
+    '2': numDecks * 4,
+    '3': numDecks * 4,
+    '4': numDecks * 4,
+    '5': numDecks * 4,
+    '6': numDecks * 4,
+    '7': numDecks * 4,
+    '8': numDecks * 4,
+    '9': numDecks * 4,
+    '10': numDecks * 4,
+    'J': numDecks * 4,
+    'Q': numDecks * 4,
+    'K': numDecks * 4,
+    'A': numDecks * 4,
+  };
+};
+
+// Update card counts when a card is dealt
+export const updateCardCounts = (cardCounts: CardCounts, card: Card): CardCounts => {
+  return {
+    ...cardCounts,
+    [card.rank]: Math.max(0, cardCounts[card.rank] - 1)
+  };
+};
+
+// Calculate recommended bet based on true count
+export const calculateRecommendedBet = (trueCount: number, baseBet: number = 10): number => {
+  // Conservative Kelly Criterion approach
+  if (trueCount <= 1) {
+    return baseBet; // Minimum bet
+  } else if (trueCount <= 2) {
+    return baseBet * 2;
+  } else if (trueCount <= 3) {
+    return baseBet * 3;
+  } else if (trueCount <= 4) {
+    return baseBet * 4;
+  } else {
+    return baseBet * 5; // Maximum bet multiplier
+  }
+};
+
+// Get standard chip denominations
+export const getChipDenominations = (): number[] => {
+  return [5, 10, 25, 50, 100];
 };
 
 // Fisher-Yates shuffle algorithm
@@ -126,9 +174,20 @@ export const updateRunningCount = (currentCount: number, card: Card): number => 
   return currentCount + getCardCountValue(card);
 };
 
+// Calculate true count
+export const calculateTrueCount = (runningCount: number, decksRemaining: number): number => {
+  if (decksRemaining <= 0) return 0;
+  return runningCount / decksRemaining;
+};
+
+// Calculate approximate decks remaining
+export const calculateDecksRemaining = (cardsLeft: number): number => {
+  return Math.max(0.5, cardsLeft / 52);
+};
+
 // Check if deck needs reshuffling
 export const needsReshuffle = (deck: Card[], totalCards: number): boolean => {
-  return deck.length < (totalCards * 0.5);
+  return deck.length < (totalCards * 0.25); // Reshuffle when 75% used
 };
 
 // Get game speed settings
@@ -140,6 +199,8 @@ export const getSpeedSettings = (speed: string, customTimerLength?: number, cust
       return { timerLength: 10, animationSpeed: 500 }; // 10 seconds, medium animations
     case 'fast':
       return { timerLength: 3, animationSpeed: 200 }; // 3 seconds, fast animations
+    case 'slow':
+      return { timerLength: 0, animationSpeed: 1000 }; // No timer, very slow animations
     case 'custom':
       return { 
         timerLength: customTimerLength || 10, 
@@ -181,6 +242,22 @@ export const determineWinner = (playerHand: Hand, dealerHand: Hand): string => {
   }
   
   return 'push'; // Same value
+};
+
+// Calculate winnings based on outcome
+export const calculateWinnings = (bet: number, outcome: string): number => {
+  switch (outcome) {
+    case 'player':
+      return bet; // 1:1 payout
+    case 'player-blackjack':
+      return Math.floor(bet * 1.5); // 3:2 payout
+    case 'push':
+      return 0; // No change
+    case 'dealer':
+      return -bet; // Lose bet
+    default:
+      return 0;
+  }
 };
 
 // Check if dealer should hit (dealer hits on soft 17)

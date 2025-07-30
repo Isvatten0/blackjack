@@ -5,139 +5,125 @@ interface GameControlsProps {
   gameState: GameState;
   onHit: () => void;
   onStand: () => void;
-  onDeal: () => void;
+  onDealCards: () => void;
   onNewGame: () => void;
-  turnTimeLeft?: number;
-  isTimerActive?: boolean;
+  isDealing: boolean;
+  chipPot: number;
+  currentBet: number;
 }
 
 const GameControls: React.FC<GameControlsProps> = ({
   gameState,
   onHit,
   onStand,
-  onDeal,
+  onDealCards,
   onNewGame,
-  turnTimeLeft = 0,
-  isTimerActive = false
+  isDealing,
+  chipPot,
+  currentBet
 }) => {
   const canHit = gameState === 'player-turn';
   const canStand = gameState === 'player-turn';
-  const canDeal = gameState === 'waiting';
   const canNewGame = gameState === 'game-over';
+
+  // Don't show controls during betting phase or dealing
+  if (gameState === 'waiting' || gameState === 'betting' || isDealing) {
+    return null;
+  }
 
   return (
     <div className="flex flex-col items-center space-y-4">
-      {/* Timer display */}
-      {isTimerActive && turnTimeLeft > 0 && (
-        <div className={`
-          text-lg sm:text-xl font-bold px-4 py-2 rounded-lg
-          ${turnTimeLeft <= 3 ? 'text-red-400 animate-pulse' : 'text-yellow-400'}
-        `}>
-          Time: {turnTimeLeft}s
-        </div>
-      )}
-
       {/* Main game controls */}
-      <div className="flex space-x-3 sm:space-x-4">
-        {canDeal && (
-          <button
-            onClick={onDeal}
-            className="
-              bg-green-600 hover:bg-green-700 
-              text-white font-bold 
-              py-3 px-6 sm:py-4 sm:px-8 
-              rounded-lg 
-              text-base sm:text-lg
-              transition-colors duration-200
-              shadow-lg hover:shadow-xl
-              transform hover:scale-105
-            "
-          >
-            Deal Cards
-          </button>
-        )}
-
+      <div className="flex space-x-4">
         {canHit && (
           <button
             onClick={onHit}
-            className="
-              bg-blue-600 hover:bg-blue-700 
-              text-white font-bold 
-              py-3 px-6 sm:py-4 sm:px-8 
-              rounded-lg 
-              text-base sm:text-lg
-              transition-colors duration-200
-              shadow-lg hover:shadow-xl
-              transform hover:scale-105
-            "
+            className="retro-button border-blue-400 text-blue-400 px-6 py-3"
+            disabled={isDealing}
           >
-            Hit
+            ⚡ HIT
           </button>
         )}
 
         {canStand && (
           <button
             onClick={onStand}
-            className="
-              bg-red-600 hover:bg-red-700 
-              text-white font-bold 
-              py-3 px-6 sm:py-4 sm:px-8 
-              rounded-lg 
-              text-base sm:text-lg
-              transition-colors duration-200
-              shadow-lg hover:shadow-xl
-              transform hover:scale-105
-            "
+            className="retro-button border-red-400 text-red-400 px-6 py-3"
+            disabled={isDealing}
           >
-            Stand
+            ✋ STAND
           </button>
         )}
 
         {canNewGame && (
           <button
             onClick={onNewGame}
-            className="
-              bg-purple-600 hover:bg-purple-700 
-              text-white font-bold 
-              py-3 px-6 sm:py-4 sm:px-8 
-              rounded-lg 
-              text-base sm:text-lg
-              transition-colors duration-200
-              shadow-lg hover:shadow-xl
-              transform hover:scale-105
-            "
+            className="retro-button border-green-400 text-green-400 px-6 py-3 neon-pulse"
+            disabled={chipPot <= 0}
           >
-            New Game
+            🎯 NEW GAME
           </button>
         )}
       </div>
 
-      {/* Game state indicator */}
-      <div className="text-center">
+      {/* Game state indicators */}
+      <div className="text-center retro-font-alt">
         {gameState === 'dealing' && (
-          <div className="text-yellow-400 text-sm sm:text-base animate-pulse">
-            Dealing cards...
+          <div className="text-yellow-400 text-sm animate-pulse neon-glow">
+            DEALING CARDS...
           </div>
         )}
         
         {gameState === 'dealer-turn' && (
-          <div className="text-yellow-400 text-sm sm:text-base animate-pulse">
-            Dealer playing...
+          <div className="text-yellow-400 text-sm animate-pulse neon-glow">
+            DEALER PLAYING...
           </div>
         )}
         
         {gameState === 'player-turn' && (
-          <div className="text-green-400 text-sm sm:text-base">
-            Your turn - Hit or Stand?
-          </div>
-        )}
-        
-        {gameState === 'waiting' && (
-          <div className="text-gray-400 text-sm sm:text-base">
-            Click Deal Cards to start
+          <div className="text-cyan-400 text-sm neon-glow">
+            YOUR TURN • CHOOSE WISELY
           </div>
         )}
       </div>
+
+      {/* Bankruptcy warning */}
+      {chipPot <= 0 && gameState === 'game-over' && (
+        <div className="retro-card p-3 border-red-500 text-center">
+          <div className="retro-font text-red-400 text-sm neon-glow mb-2">
+            GAME OVER
+          </div>
+          <div className="retro-font-alt text-xs text-gray-400">
+            You're out of chips! 
+          </div>
+          <button
+            onClick={() => window.location.reload()}
+            className="retro-button border-yellow-400 text-yellow-400 text-xs mt-2 px-3 py-1"
+          >
+            RESTART GAME
+          </button>
+        </div>
+      )}
+
+      {/* Additional action buttons for advanced play */}
+      {gameState === 'player-turn' && (
+        <div className="flex space-x-2 text-xs">
+          <button
+            className="retro-button border-purple-400 text-purple-400 text-xs px-3 py-1 opacity-50"
+            disabled
+            title="Coming soon!"
+          >
+            DOUBLE DOWN
+          </button>
+          <button
+            className="retro-button border-orange-400 text-orange-400 text-xs px-3 py-1 opacity-50"
+            disabled
+            title="Coming soon!"
+          >
+            SPLIT
+          </button>
+        </div>
+      )}
     </div>
   );
 };
