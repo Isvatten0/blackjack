@@ -148,15 +148,14 @@ const GameTable: React.FC = () => {
   }, []);
 
   const handleBetConfirm = useCallback(() => {
-    if (gameData.currentBet > 0 && gameData.currentBet <= gameData.chipPot) {
+    if (gameData.currentBet > 0 && gameData.currentBet <= gameData.chipPot && gameData.gameState === 'waiting') {
       setGameData(prev => ({ 
         ...prev, 
         gameState: 'dealing',
         gameMessage: 'Dealing cards...'
       }));
-      handleDealCards();
     }
-  }, [gameData.currentBet, gameData.chipPot]);
+  }, [gameData.currentBet, gameData.chipPot, gameData.gameState]);
 
   const reshuffleDeck = useCallback(() => {
     const newDeck = createShuffledDecks(gameData.settings.numDecks);
@@ -171,9 +170,10 @@ const GameTable: React.FC = () => {
   }, [gameData.settings.numDecks]);
 
   const handleDealCards = useCallback(async () => {
-    if (gameData.gameState !== 'dealing') return;
+    if (isDealing) return; // Prevent multiple simultaneous calls
 
-    setIsDealing(true);
+    try {
+      setIsDealing(true);
     let currentDeck = [...gameData.deck];
     let currentRunningCount = gameData.runningCount;
     let currentCardCounts = { ...gameData.cardCounts };
@@ -315,7 +315,23 @@ const GameTable: React.FC = () => {
         playLoss();
       }
     }
-  }, [gameData, getAnimationSpeed, getTimerLength, updateGameStats]);
+    } catch (error) {
+      console.error('Error in handleDealCards:', error);
+      setIsDealing(false);
+      setGameData(prev => ({
+        ...prev,
+        gameState: 'waiting',
+        gameMessage: 'Error dealing cards. Please try again.'
+      }));
+    }
+  }, [gameData.deck, gameData.runningCount, gameData.cardCounts, gameData.originalDeckSize, gameData.settings, gameData.currentBet, gameData.chipPot, isDealing, getAnimationSpeed, getTimerLength, updateGameStats]);
+
+  // Effect to handle dealing cards when game state changes to 'dealing'
+  useEffect(() => {
+    if (gameData.gameState === 'dealing' && !isDealing) {
+      handleDealCards();
+    }
+  }, [gameData.gameState, isDealing, handleDealCards]);
 
   const handleHit = useCallback(async () => {
     if (gameData.gameState !== 'player-turn') return;
@@ -364,7 +380,7 @@ const GameTable: React.FC = () => {
       }));
       saveChipPot(newChipPot);
     }
-  }, [gameData, getAnimationSpeed, getTimerLength, updateGameStats]);
+  }, [gameData.deck, gameData.playerHand, gameData.runningCount, gameData.cardCounts, gameData.settings, gameData.currentBet, gameData.chipPot, gameData.dealerHand, getAnimationSpeed, getTimerLength, updateGameStats]);
 
   const handleStand = useCallback(async () => {
     if (gameData.gameState !== 'player-turn') return;
@@ -453,7 +469,7 @@ const GameTable: React.FC = () => {
     }));
     
     saveChipPot(newChipPot);
-  }, [gameData, getAnimationSpeed, updateGameStats]);
+  }, [gameData.deck, gameData.playerHand, gameData.runningCount, gameData.cardCounts, gameData.currentBet, gameData.chipPot, gameData.dealerHand, getAnimationSpeed, updateGameStats]);
 
   const handleNewGame = useCallback(() => {
     setGameData(prev => ({
